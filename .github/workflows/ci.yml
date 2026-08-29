@@ -33,4 +33,46 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t catsdogs-api . || echo "Dockerfile present, build step verified in workflow"
+      - name: Build Docker image
+        run: docker build -t catsdogs-api:${{ github.sha }} -t catsdogs-api:latest .
+      - name: Save image as artifact
+        run: docker save catsdogs-api:latest -o catsdogs-api.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: catsdogs-api.tar
+          retention-days: 1
+
+  deploy:
+    name: Deploy & Smoke Test
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: docker load -i catsdogs-api.tar
+
+      - name: Deploy with Docker Compose
+        run: |
+          docker compose up -d
+          sleep 10
+
+      - name: Make smoke test script executable
+        run: chmod +x scripts/smoke_test.sh
+
+      - name: Run smoke tests (fails pipeline if health/predict check fails)
+        run: bash scripts/smoke_test.sh http://localhost:8000
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down
